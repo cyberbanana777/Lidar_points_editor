@@ -1,74 +1,83 @@
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
-import PointCloud from './PointCloud'
-import TestPointCloud from './TestPointCloud'
-import { useEffect, useState } from 'react'
+import { useRef, useEffect } from 'react'
+import { useThree } from '@react-three/fiber'
+import * as THREE from 'three'
 
-export default function CanvasScene({ pointCloudData, onPointCloudLoad, onPointCloudError }) {
-  const [mounted, setMounted] = useState(false)
+const CanvasScene = ({ pointCloudData, activeTool, onPointCloudLoad, onPointCloudError }) => {
+  const pointsRef = useRef()
+  const { scene, camera } = useThree()
 
   useEffect(() => {
-    setMounted(true)
-    return () => setMounted(false)
-  }, [])
+    if (!pointCloudData || !pointCloudData.points || pointCloudData.points.length === 0) {
+      console.log('No point cloud data available')
+      return
+    }
 
-  if (!mounted) {
-    return (
-      <div style={{ 
-        width: '100%', 
-        height: '100vh', 
-        background: '#1a1a1a',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'white'
-      }}>
-        Loading 3D Viewer...
-      </div>
-    )
-  }
+    try {
+      console.log('Creating point cloud with:', pointCloudData.points.length, 'points')
 
-  return (
-    <Canvas
-      camera={{
-        position: [15, 15, 15], // Отодвинем камеру подальше
-        fov: 60,
-        near: 0.1,
-        far: 1000
-      }}
-      style={{ width: '100%', height: '100vh', background: '#1a1a1a' }}
-      onCreated={({ gl }) => {
-        // Добавим обработчик потери контекста
-        gl.domElement.addEventListener('webglcontextlost', (event) => {
-          console.log('WebGL context lost')
-          event.preventDefault()
-        })
-      }}
-    >
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[10, 10, 5]} intensity={1} />
+      // Очищаем предыдущие точки
+      const pointsToRemove = []
+      scene.children.forEach(child => {
+        if (child.isPoints) {
+          pointsToRemove.push(child)
+        }
+      })
       
-      {/* Всегда показываем тестовые точки для ориентира */}
-      <TestPointCloud />
+      pointsToRemove.forEach(child => {
+        scene.remove(child)
+        if (child.geometry) child.geometry.dispose()
+        if (child.material) child.material.dispose()
+      })
+
+      // Создаем геометрию
+      const geometry = new THREE.BufferGeometry()
+      const positions = new Float32Array(pointCloudData.points.length * 3)
       
-      {/* Загруженные точки */}
-      {pointCloudData && (
-        <PointCloud 
-          data={pointCloudData} 
-          onLoad={onPointCloudLoad}
-          onError={onPointCloudError}
-        />
-      )}
-      
-      <OrbitControls 
-        enablePan={true}
-        enableZoom={true}
-        enableRotate={true}
-        makeDefault
-      />
-      
-      <axesHelper args={[10]} />
-      <gridHelper args={[20, 20]} />
-    </Canvas>
-  )
+      // Заполняем позиции
+      pointCloudData.points.forEach((point, i) => {
+        positions[i * 3] = point.x || 0
+        positions[i * 3 + 1] = point.y || 0
+        positions[i * 3 + 2] = point.z || 0
+      })
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      geometry.computeBoundingSphere()
+
+      // Простой материал без цветов
+      const material = new THREE.PointsMaterial({
+        size: 0.1,
+        color: 0x00ff00, // Зеленый цвет для всех точек
+        sizeAttenuation: true
+      })
+
+      // Создаем объект точек
+      const points = new THREE.Points(geometry, material)
+      scene.add(points)
+
+      // Настраиваем камеру
+      if (geometry.boundingSphere) {
+        const { center, radius } = geometry.boundingSphere
+        camera.position.set(center.x + radius * 2, center.y + radius * 2, center.z + radius * 2)
+        camera.lookAt(center)
+      }
+
+      console.log('Point cloud successfully created')
+      onPointCloudLoad?.()
+
+    } catch (error) {
+      console.error('Error creating point cloud:', error)
+      onPointCloudError?.(error.message)
+    }
+
+    // Cleanup
+    return () => {
+      if (pointsRef.current) {
+        scene.remove(pointsRef.current)
+      }
+    }
+  }, [pointCloudData, scene, camera, onPointCloudLoad, onPointCloudError])
+
+  return null
 }
+
+export default CanvasScene

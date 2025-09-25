@@ -1,38 +1,94 @@
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
+import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 
-export default function TestPointCloud() {
-  // Создаем тестовые данные - 5 точек в форме креста
-  const vertices = new Float32Array([
-     0,  0,  0,  // центр
-     5,  0,  0,  // право
-    -5,  0,  0,  // лево
-     0,  5,  0,  // верх
-     0, -5,  0   // низ
-  ])
-  
-  const colors = new Float32Array([
-    1, 0, 0,  // красный - центр
-    0, 1, 0,  // зеленый - право  
-    0, 0, 1,  // синий - лево
-    1, 1, 0,  // желтый - верх
-    1, 0, 1   // magenta - низ
-  ])
+const PointCloud = ({ pointCloudData, onPointCloudLoad, onPointCloudError }) => {
+  const pointsRef = useRef()
+  const { scene, camera } = useThree()
 
-  // Создаем геометрию и материал
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  geometry.computeBoundingSphere()
+  useEffect(() => {
+    if (!pointCloudData || !pointCloudData.points || pointCloudData.points.length === 0) {
+      console.log('No point cloud data available')
+      return
+    }
 
-  const material = new THREE.PointsMaterial({
-    size: 0.5,
-    vertexColors: true,
-    sizeAttenuation: true
-  })
+    try {
+      console.log('Creating point cloud with:', pointCloudData.points.length, 'points')
 
-  // Создаем points object
-  const points = new THREE.Points(geometry, material)
+      // Очищаем предыдущие точки
+      scene.children.forEach(child => {
+        if (child.isPoints) {
+          scene.remove(child)
+          if (child.geometry) child.geometry.dispose()
+          if (child.material) child.material.dispose()
+        }
+      })
 
-  return <primitive object={points} />
+      // Создаем геометрию
+      const geometry = new THREE.BufferGeometry()
+      const positions = new Float32Array(pointCloudData.points.length * 3)
+      
+      // Заполняем позиции
+      pointCloudData.points.forEach((point, i) => {
+        positions[i * 3] = point.x || 0
+        positions[i * 3 + 1] = point.y || 0
+        positions[i * 3 + 2] = point.z || 0
+      })
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+
+      // Создаем цвета на основе высоты
+      const colors = new Float32Array(pointCloudData.points.length * 3)
+      const { minZ, maxZ } = pointCloudData.bounds
+      const heightRange = maxZ - minZ
+
+      pointCloudData.points.forEach((point, i) => {
+        const heightRatio = heightRange > 0 ? (point.z - minZ) / heightRange : 0.5
+        
+        colors[i * 3] = heightRatio // R
+        colors[i * 3 + 1] = 0.2     // G 
+        colors[i * 3 + 2] = 1 - heightRatio // B
+      })
+
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+      geometry.computeBoundingSphere()
+
+      // Создаем материал
+      const material = new THREE.PointsMaterial({
+        size: 0.05,
+        vertexColors: true,
+        sizeAttenuation: true
+      })
+
+      // Создаем объект точек
+      const points = new THREE.Points(geometry, material)
+      pointsRef.current = points
+      scene.add(points)
+
+      // Настраиваем камеру
+      if (geometry.boundingSphere) {
+        const { center, radius } = geometry.boundingSphere
+        camera.position.set(center.x + radius * 2, center.y + radius * 2, center.z + radius * 2)
+        camera.lookAt(center)
+      }
+
+      console.log('Point cloud successfully created')
+      onPointCloudLoad?.()
+
+    } catch (error) {
+      console.error('Error creating point cloud:', error)
+      onPointCloudError?.(error.message)
+    }
+
+    // Cleanup
+    return () => {
+      if (pointsRef.current) {
+        scene.remove(pointsRef.current)
+      }
+    }
+  }, [pointCloudData, scene, camera, onPointCloudLoad, onPointCloudError])
+
+  return null
 }
+
+export default PointCloud

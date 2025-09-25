@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import CanvasScene from './components/CanvasScene'
+// src/App.jsx
+import { useState, useRef, useEffect } from 'react'
+import { Canvas } from '@react-three/fiber'
+import { OrbitControls } from '@react-three/drei'
 import FileUpload from './components/FileUpload'
 import EditingTools from './components/EditingTools'
-import ErrorBoundary from './components/ErrorBoundary'
+import PointCloud from './components/PointCloud' // Импорт из отдельного файла
 import './App.css'
 
 function App() {
@@ -10,124 +12,145 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [activeTool, setActiveTool] = useState('select')
+  const orbitControlsRef = useRef()
 
-const parsePCD = (arrayBuffer) => {
-  console.log('Parsing PCD file, size:', arrayBuffer.byteLength)
-  
-  try {
-    const textDecoder = new TextDecoder('utf-8')
-    const headerText = textDecoder.decode(new Uint8Array(arrayBuffer, 0, Math.min(512, arrayBuffer.byteLength)))
-    console.log('Header preview:', headerText.substring(0, 100))
+  useEffect(() => {
+    if (orbitControlsRef.current) {
+      window.orbitControls = orbitControlsRef.current
+    }
+    return () => {
+      window.orbitControls = null
+    }
+  }, [])
 
-    // Определяем формат данных
-    const isAscii = headerText.includes('DATA ascii')
-    const isBinary = headerText.includes('DATA binary')
-    const isCompressed = headerText.includes('DATA binary_compressed')
-
-    console.log('Format detection:', { isAscii, isBinary, isCompressed })
-
-    if (isBinary || isCompressed) {
-      throw new Error(`Бинарные форматы (${isBinary ? 'binary' : 'compressed'}) не поддерживаются. Используйте ASCII формат.`)
+  // Функция для расчета границ точек
+  const calculateBounds = (points) => {
+    if (!points || points.length === 0) {
+      return { minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1 }
     }
 
-    if (!isAscii) {
-      throw new Error('Формат данных не распознан. Поддерживается только DATA ascii.')
-    }
+    let minX = Infinity, maxX = -Infinity
+    let minY = Infinity, maxY = -Infinity  
+    let minZ = Infinity, maxZ = -Infinity
 
-    // Парсим заголовок
-    const lines = headerText.split('\n')
-    let pointsCount = 0
-    let dataStartIndex = -1
-    let fields = []
+    points.forEach(point => {
+      minX = Math.min(minX, point.x)
+      maxX = Math.max(maxX, point.x)
+      minY = Math.min(minY, point.y)
+      maxY = Math.max(maxY, point.y)
+      minZ = Math.min(minZ, point.z)
+      maxZ = Math.max(maxZ, point.z)
+    })
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim()
-      
-      if (line.startsWith('FIELDS')) {
-        fields = line.substring(6).trim().split(' ')
-        console.log('Fields found:', fields)
-      }
-      else if (line.startsWith('POINTS')) {
-        pointsCount = parseInt(line.substring(6).trim(), 10)
-        console.log('Points count:', pointsCount)
-      }
-      else if (line.startsWith('WIDTH')) {
-        const width = parseInt(line.substring(5).trim(), 10)
-        console.log('Width:', width)
-      }
-      else if (line === 'DATA ascii') {
-        dataStartIndex = i + 1
-        console.log('Data starts at line:', dataStartIndex)
-        break
-      }
-    }
+    return { minX, maxX, minY, maxY, minZ, maxZ }
+  }
 
-    if (dataStartIndex === -1) {
-      throw new Error('Не удалось найти начало данных (DATA ascii)')
-    }
-
-    if (pointsCount === 0) {
-      throw new Error('Количество точек не указано или равно 0')
-    }
-
-    // Парсим ASCII данные
-    const fullText = textDecoder.decode(arrayBuffer)
-    const allLines = fullText.split('\n')
+  // Функция парсинга PCD файла
+  const parsePCD = (arrayBuffer) => {
+    console.log('Parsing PCD file, size:', arrayBuffer.byteLength)
     
-    const points = []
-    const colors = []
-    let parsedPoints = 0
+    try {
+      const textDecoder = new TextDecoder('utf-8')
+      const headerText = textDecoder.decode(new Uint8Array(arrayBuffer, 0, Math.min(512, arrayBuffer.byteLength)))
+      console.log('Header preview:', headerText.substring(0, 100))
 
-    for (let i = dataStartIndex; i < allLines.length && parsedPoints < pointsCount; i++) {
-      const line = allLines[i].trim()
-      if (line && !line.startsWith('#')) {
-        const values = line.split(/\s+/).map(parseFloat).filter(v => !isNaN(v))
+      const lines = headerText.split('\n')
+      let pointsCount = 0
+      let dataStartIndex = -1
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim()
         
-        if (values.length >= 3) {
-          // Добавляем координаты (первые 3 значения)
-          points.push(values[0], values[1], values[2])
-          
-          // Генерируем цвет на основе позиции для визуализации
-          const r = (values[0] % 1 + 1) / 2
-          const g = (values[1] % 1 + 1) / 2
-          const b = (values[2] % 1 + 1) / 2
-          colors.push(r, g, b)
-          
-          parsedPoints++
+        if (line.startsWith('POINTS')) {
+          pointsCount = parseInt(line.substring(6).trim(), 10)
+          console.log('Points count:', pointsCount)
+        }
+        else if (line === 'DATA ascii') {
+          dataStartIndex = i + 1
+          console.log('Data starts at line:', dataStartIndex)
+          break
         }
       }
-    }
 
-    console.log(`Successfully parsed ${parsedPoints}/${pointsCount} points`)
+      if (dataStartIndex === -1) {
+        throw new Error('Не удалось найти начало данных (DATA ascii)')
+      }
 
-    if (parsedPoints === 0) {
-      throw new Error('Не удалось распарсить ни одной точки')
-    }
+      if (pointsCount === 0) {
+        throw new Error('Количество точек не указано или равно 0')
+      }
 
-    return {
-      points: new Float32Array(points),
-      colors: new Float32Array(colors)
-    }
-    
-  } catch (error) {
-    console.error('PCD parsing error:', error)
-    
-    // Возвращаем тестовые данные для демонстрации
-    return {
-      points: new Float32Array([
-        -2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0, 0, 0, 3
-      ]),
-      colors: new Float32Array([
-        1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 0, 1
-      ])
-    }
-  }
-}
+      // Находим точное начало данных
+      const fullText = textDecoder.decode(arrayBuffer)
+      const dataStartByte = fullText.indexOf('DATA ascii') + 'DATA ascii'.length
+      const dataText = fullText.substring(dataStartByte).trim()
+      
+      const allLines = dataText.split('\n')
+      const points = []
+      let parsedPoints = 0
 
-  // Функция анализа файла
-  const analyzeFile = (arrayBuffer) => {
-    console.log('Analyzing file, size:', arrayBuffer.byteLength)
-    return 'File analysis complete'
+      for (let i = 0; i < allLines.length && parsedPoints < pointsCount; i++) {
+        const line = allLines[i].trim()
+        if (line && !line.startsWith('#')) {
+          const values = line.split(/\s+/).map(parseFloat).filter(v => !isNaN(v))
+          
+          if (values.length >= 3) {
+            points.push({
+              x: values[0],
+              y: values[1], 
+              z: values[2],
+              intensity: values.length > 3 ? values[3] : 0
+            })
+            parsedPoints++
+          }
+        }
+      }
+
+      console.log(`Successfully parsed ${parsedPoints}/${pointsCount} points`)
+
+      // Даунсемплинг
+      let finalPoints = points
+      if (parsedPoints > 50000) {
+        console.log(`Downsampling ${parsedPoints} points...`)
+        const step = Math.ceil(parsedPoints / 50000)
+        finalPoints = []
+        
+        for (let i = 0; i < points.length; i += step) {
+          if (i < points.length) {
+            finalPoints.push(points[i])
+          }
+        }
+        console.log(`Downsampled to ${finalPoints.length} points`)
+      }
+
+      if (finalPoints.length === 0) {
+        throw new Error('Не удалось распарсить ни одной точки')
+      }
+
+      return {
+        points: finalPoints,
+        pointCount: finalPoints.length,
+        bounds: calculateBounds(finalPoints)
+      }
+      
+    } catch (error) {
+      console.error('PCD parsing error:', error)
+      
+      // Тестовые данные
+      const testPoints = [
+        { x: -2, y: -2, z: 0, intensity: 1 },
+        { x: 2, y: -2, z: 0, intensity: 1 },
+        { x: 2, y: 2, z: 0, intensity: 1 },
+        { x: -2, y: 2, z: 0, intensity: 1 },
+        { x: 0, y: 0, z: 3, intensity: 1 }
+      ]
+      
+      return {
+        points: testPoints,
+        pointCount: testPoints.length,
+        bounds: calculateBounds(testPoints)
+      }
+    }
   }
 
   // Обработчик загрузки файла
@@ -139,17 +162,16 @@ const parsePCD = (arrayBuffer) => {
     try {
       console.log('Processing file:', fileData.file.name)
       
-      // Анализируем файл
-      analyzeFile(fileData.content)
-      
-      // Парсим PCD
       const parsedData = parsePCD(fileData.content)
       setPointCloudData(parsedData)
-      console.log('File processed successfully')
+      console.log('File processed successfully', {
+        points: parsedData.points.length,
+        bounds: parsedData.bounds
+      })
       
     } catch (error) {
       console.error('Error:', error)
-      setError('Failed to process file')
+      setError(`Failed to process file: ${error.message}`)
     } finally {
       setIsLoading(false)
     }
@@ -158,6 +180,7 @@ const parsePCD = (arrayBuffer) => {
   // Остальные обработчики
   const handleToolSelect = (tool) => {
     setActiveTool(tool)
+    console.log('Tool selected:', tool)
   }
 
   const handleClearSelection = () => {
@@ -173,52 +196,75 @@ const parsePCD = (arrayBuffer) => {
   }
 
   const handlePointCloudLoad = () => {
-    console.log('Point cloud loaded')
+    console.log('Point cloud loaded in scene')
   }
 
   const handlePointCloudError = (errorMessage) => {
-    setError(errorMessage)
+    setError(`3D Error: ${errorMessage}`)
   }
 
-  // Возврат JSX
   return (
-    <ErrorBoundary>
-      <div className="app">
-        <div className="toolbar">
-          <h2>Lidar Editor</h2>
-          <FileUpload onFileUpload={handleFileUpload} />
-          {isLoading && <div className="loading">Processing...</div>}
-          {error && (
-            <div className="error">
-              Error: {error}
-              <button onClick={() => setError(null)}>×</button>
-            </div>
-          )}
-          {pointCloudData && (
-            <div className="success">
-              Loaded: {pointCloudData.points.length / 3} points
-            </div>
-          )}
-        </div>
-        
-        <EditingTools
-          onToolSelect={handleToolSelect}
-          onClearSelection={handleClearSelection}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          canUndo={false}
-          canRedo={false}
-        />
-        
-        <div className="viewer-container">
-          <CanvasScene 
+    <div className="app">
+      <div className="toolbar">
+        <h2>Lidar Editor</h2>
+        <FileUpload onFileUpload={handleFileUpload} />
+        {isLoading && <div className="loading">Processing...</div>}
+        {error && (
+          <div className="error">
+            Error: {error}
+            <button onClick={() => setError(null)}>×</button>
+          </div>
+        )}
+        {pointCloudData && (
+          <div className="success">
+            Loaded: {pointCloudData.pointCount} points
+          </div>
+        )}
+      </div>
+      
+      <EditingTools
+        activeTool={activeTool}
+        onToolSelect={handleToolSelect}
+        onClearSelection={handleClearSelection}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={false}
+        canRedo={false}
+      />
+      
+      <div className="viewer-container">
+        <Canvas
+          camera={{ 
+            position: [0, 0, 100],
+            fov: 60,
+            near: 0.1,
+            far: 100000
+          }}
+          style={{ background: '#1e1e1e' }}
+        >
+          <color attach="background" args={['#1e1e1e']} />
+          <ambientLight intensity={0.8} />
+          <pointLight position={[1000, 1000, 1000]} intensity={1} />
+          
+          <OrbitControls 
+            ref={orbitControlsRef}
+            enablePan={true} 
+            enableZoom={true} 
+            enableRotate={true}
+            minDistance={1}
+            maxDistance={100000}
+            rotateSpeed={0.5}
+            zoomSpeed={0.8}
+          />
+          
+          <PointCloud 
             pointCloudData={pointCloudData}
             onPointCloudLoad={handlePointCloudLoad}
             onPointCloudError={handlePointCloudError}
           />
-        </div>
+        </Canvas>
       </div>
-    </ErrorBoundary>
+    </div>
   )
 }
 
